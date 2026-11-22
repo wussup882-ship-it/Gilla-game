@@ -3,8 +3,8 @@ name: Build Gilla Remake APK
 # Base APK: attach GillaRemake__1_.apk to a GitHub Release tagged  base-apk
 # (the website allows big files there), or put it in the repo root with git.
 # Optional: Settings > Secrets and variables > Actions >
-#   Variables:  SERVER_URL  = wss://your-server-address   (multiplayer relay)
-#   Secrets:    MOD_TOKEN   = any secret word             (real kick rights)
+#   Variables:  SERVER_URL  = wss://gilla-server.onrender.com   (multiplayer relay)
+#   Secrets:    MOD_TOKEN   = pp            (real kick rights)
 # Run it from the Actions tab. The signed APK appears under "Artifacts".
 
 on:
