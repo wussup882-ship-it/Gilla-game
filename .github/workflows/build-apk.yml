@@ -1,0 +1,97 @@
+name: Build Gilla Remake APK
+
+# Base APK: attach GillaRemake__1_.apk to a GitHub Release tagged  base-apk
+# (the website allows big files there), or put it in the repo root with git.
+# Optional: Settings > Secrets and variables > Actions >
+#   Variables:  SERVER_URL  = wss://your-server-address   (multiplayer relay)
+#   Secrets:    MOD_TOKEN   = any secret word             (real kick rights)
+# Run it from the Actions tab. The signed APK appears under "Artifacts".
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_mod_token:
+        description: "Bake the MOD_TOKEN into this APK (PRIVATE build only - anyone with the APK can read it)"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get base APK (from repo root, or from the "base-apk" release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f GillaRemake__1_.apk ]; then
+            gh release download base-apk -p GillaRemake__1_.apk --repo "$GITHUB_REPOSITORY" || { echo "Attach GillaRemake__1_.apk to a release tagged base-apk"; exit 1; }
+          fi
+          ls -la GillaRemake__1_.apk
+
+      - name: Check inputs
+        run: |
+          ls
+          test -f game/main.gd || test -f main.gd || { echo "main.gd not found"; exit 1; }
+          test -f map/lethal_ape_map.glb || test -f lethal_ape_map.glb || { echo "lethal_ape_map.glb not found"; exit 1; }
+
+      - name: Patch APK
+        env:
+          SERVER_URL: ${{ vars.SERVER_URL }}
+          MOD_TOKEN: ${{ secrets.MOD_TOKEN }}
+          INCLUDE_TOKEN: ${{ inputs.include_mod_token }}
+        run: |
+          python3 - <<'PY'
+          import os, glob, zipfile
+          src = "GillaRemake__1_.apk"
+          out = "patched_unsigned.apk"
+          old_scripts = ["game", "main", "gorilla_player", "mats", "avatar"]
+          drop = set()
+          for m in old_scripts:
+              drop.add(f"assets/{m}.gd.remap")
+              drop.add(f"assets/{m}.gdc")
+          extra = {}
+          # works with folders (game/, map/) OR with all files flat in the repo root
+          gd_files = glob.glob("game/*.gd") or glob.glob("*.gd")
+          map_file = "map/lethal_ape_map.glb" if os.path.exists("map/lethal_ape_map.glb") else "lethal_ape_map.glb"
+          for f in gd_files:
+              extra["assets/" + os.path.basename(f)] = open(f, "rb").read()
+          extra["assets/lethal_ape_map.glb"] = open(map_file, "rb").read()
+          url = os.environ.get("SERVER_URL", "").strip()
+          if url:
+              extra["assets/server_url.txt"] = url.encode()
+          tok = os.environ.get("MOD_TOKEN", "").strip()
+          if tok and os.environ.get("INCLUDE_TOKEN", "false").lower() == "true":
+              extra["assets/mod_token.txt"] = tok.encode()
+          zin = zipfile.ZipFile(src)
+          zout = zipfile.ZipFile(out, "w")
+          for info in zin.infolist():
+              n = info.filename
+              if n.startswith("META-INF/") or n in drop or n in extra:
+                  continue
+              zi = zipfile.ZipInfo(n, date_time=info.date_time)
+              zi.compress_type = info.compress_type
+              zout.writestr(zi, zin.read(n))
+          for n, data in extra.items():
+              zi = zipfile.ZipInfo(n, date_time=(2026, 11, 21, 0, 0, 0))
+              zi.compress_type = zipfile.ZIP_DEFLATED
+              zout.writestr(zi, data)
+          zout.close()
+          print("server url baked in:", bool(url), "| mod token baked in:", "assets/mod_token.txt" in extra)
+          PY
+
+      - name: Align and sign
+        run: |
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          $BT/zipalign -f -p 4 patched_unsigned.apk patched_aligned.apk
+          keytool -genkeypair -keystore debug.keystore -storepass android -keypass android \
+            -alias key -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Gilla Remake"
+          $BT/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
+            --out GillaRemake-rebuilt.apk patched_aligned.apk
+          $BT/apksigner verify GillaRemake-rebuilt.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GillaRemake-rebuilt
+          path: GillaRemake-rebuilt.apk
